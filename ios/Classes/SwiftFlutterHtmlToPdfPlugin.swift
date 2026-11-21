@@ -11,7 +11,21 @@ public class SwiftFlutterHtmlToPdfPlugin: NSObject, FlutterPlugin{
     let instance = SwiftFlutterHtmlToPdfPlugin()
     registrar.addMethodCallDelegate(instance, channel: channel)
   }
-    
+
+    /// UIScene-safe key window lookup. `UIApplication.shared.delegate.window` is nil
+    /// under UISceneDelegate (mandatory when building with the iOS 27 SDK), so resolve
+    /// the key window from the connected window scenes instead.
+    private static func sceneKeyWindow() -> UIWindow? {
+        if #available(iOS 13.0, *) {
+            let windows = UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .flatMap { $0.windows }
+            return windows.first(where: { $0.isKeyWindow }) ?? windows.first
+        }
+        // iOS < 13 has no UIScene; fall back to the app delegate's window.
+        return UIApplication.shared.delegate?.window ?? nil
+    }
+
     public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
     switch call.method {
     case "convertHtmlToPdf":
@@ -19,11 +33,14 @@ public class SwiftFlutterHtmlToPdfPlugin: NSObject, FlutterPlugin{
         let htmlFilePath = args!["htmlFilePath"] as? String
         
         // !!! this is workaround for issue with rendering PDF images on iOS !!!
-        let viewControler = UIApplication.shared.delegate?.window?!.rootViewController
-        wkWebView = WKWebView.init(frame: viewControler!.view.bounds)
+        guard let viewControler = SwiftFlutterHtmlToPdfPlugin.sceneKeyWindow()?.rootViewController else {
+            result(FlutterError(code: "NO_KEY_WINDOW", message: "No key window available to render HTML to PDF", details: nil))
+            return
+        }
+        wkWebView = WKWebView.init(frame: viewControler.view.bounds)
         wkWebView.isHidden = true
         wkWebView.tag = 100
-        viewControler?.view.addSubview(wkWebView)
+        viewControler.view.addSubview(wkWebView)
         
         let htmlFileContent = FileHelper.getContent(from: htmlFilePath!) // get html content from file
         wkWebView.loadHTMLString(htmlFileContent, baseURL: Bundle.main.bundleURL) // load html into hidden webview
@@ -33,7 +50,7 @@ public class SwiftFlutterHtmlToPdfPlugin: NSObject, FlutterPlugin{
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                 let convertedFileURL = PDFCreator.create(printFormatter: self.wkWebView.viewPrintFormatter())
                 let convertedFilePath = convertedFileURL.absoluteString.replacingOccurrences(of: "file://", with: "") // return generated pdf path
-                if let viewWithTag = viewControler?.view.viewWithTag(100) {
+                if let viewWithTag = viewControler.view.viewWithTag(100) {
                     viewWithTag.removeFromSuperview() // remove hidden webview when pdf is generated
                     
                     // clear WKWebView cache
